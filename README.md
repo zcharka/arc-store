@@ -1,6 +1,6 @@
 # Arc Store
 
-## EN:
+## EN
 Arc Store is app for [ArcOS](https://github.com/zcharka/ArcOS). App can:
 - install packages
 - uninstall packages
@@ -14,7 +14,7 @@ Arc Store is app for [ArcOS](https://github.com/zcharka/ArcOS). App can:
 - desktop-file-utils
 - hicolor-icon-theme
 
-## PL:
+## PL
 Arc Store jest aplikacją dla [ArcOS](https://github.com/zcharka/ArcOS). Aplikacja może:
 - instalować pakiety
 - Usuwać pakiety
