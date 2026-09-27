@@ -6,7 +6,7 @@ Arc Store is app for [ArcOS](https://github.com/zcharka/ArcOS). App can:
 - uninstall packages
 - Clear cache
 
-## Dependencies:
+### Dependencies:
 - python-gobject
 - gtk4
 - libadwaita
@@ -20,7 +20,7 @@ Arc Store jest aplikacją dla [ArcOS](https://github.com/zcharka/ArcOS). Aplikac
 - Usuwać pakiety
 - Czyścić pamięć podręczną
 
-## Zależności:
+### Zależności:
 - python-gobject
 - gtk4
 - libadwaita
