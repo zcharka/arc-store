@@ -163,5 +163,59 @@ class SudoManager:
             pass
 
 
-def get_sudo_manager() -> SudoManager:
+# Hosted inside Arc Center, there is already a SudoManager in the process —
+# Arc Center's own — and it is the one that matters: Arc Center watches
+# every subprocess call and locks its sidebar and window controls for as
+# long as a command runs through *its* wrapper script. A second manager
+# with a wrapper of its own would still work, but Arc Center would never
+# notice those commands, so the window could be closed or switched away
+# from in the middle of a package transaction. arc_store_hosting.py hands
+# Arc Center's manager over through use_shared_manager() below.
+_shared_manager = None
+
+# Everything package_manager.py calls on a manager. A host that doesn't
+# provide all of these isn't adopted (Arc Store then just keeps its own).
+_REQUIRED_API = (
+    "wrapper_path", "askpass_script", "user_password", "get_env",
+    "run_privileged", "start_privileged_session", "stop_privileged_session",
+    "validate_password", "set_password", "forget_password",
+)
+
+
+def use_shared_manager(manager) -> bool:
+    """Adopt `manager` (the host's) as *the* sudo manager. Returns False,
+    and changes nothing, if it doesn't offer the whole API above."""
+    global _shared_manager
+    if manager is None or not all(hasattr(manager, name) for name in _REQUIRED_API):
+        return False
+    _shared_manager = manager
+    return True
+
+
+def get_sudo_manager():
+    if _shared_manager is not None:
+        return _shared_manager
     return SudoManager.get_instance()
+
+
+class LazySudoManager:
+    """Stand-in that looks up the real manager on every use.
+
+    package_manager.py keeps one module-level `sudo_manager`, created while
+    the module is imported. Arc Center imports widget modules in a
+    background thread *before* the widget exists, i.e. before it is known
+    whether a host manager is going to be adopted. Resolving lazily means
+    that import creates no temp files, FIFO or feeder thread it might
+    never use, and that use_shared_manager() takes effect for code that
+    already holds a reference to this object."""
+
+    def __getattr__(self, name):
+        # Only ever called for names this class doesn't define. Python's
+        # own probing (copy, pickle, inspect, ...) asks for dunders; those
+        # must not be the thing that first spins up a real manager.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return getattr(get_sudo_manager(), name)
+
+    def __bool__(self):
+        return True

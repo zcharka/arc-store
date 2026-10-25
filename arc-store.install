@@ -5,6 +5,39 @@ post_install() {
 
 post_upgrade() {
     post_install
+    # If Arc Store was moved to Arc Center ("Move to Arc Center" switch),
+    # /usr/share/arcos/widgets/ holds a copy of arc_store_widget.py that
+    # pacman doesn't know about and so won't update. It is only a thin
+    # loader, but keep it identical to the packaged one anyway, so a
+    # change to it can never leave an old copy behind.
+    if [ -f /usr/share/arcos/widgets/arc_store_widget.py ]; then
+        install -Dm644 /usr/share/arc-store/arc_store_widget.py \
+            /usr/share/arcos/widgets/arc_store_widget.py || true
+    fi
+}
+
+pre_remove() {
+    # The "Move to Arc Center" switch creates files outside anything this
+    # package's own file list covers, so pacman will not remove them:
+    #   - /usr/share/arcos/widgets/arc_store_widget.py (the widget copy).
+    #     Left behind it would be a widget in Arc Center that fails to
+    #     load, pointing at a package that is no longer there.
+    #   - ~/.local/share/applications/github.zcharka.arcstore.desktop, a
+    #     per-user NoDisplay=true copy of the menu entry. Left behind it
+    #     would keep a freshly reinstalled Arc Store hidden from the menu.
+    rm -f /usr/share/arcos/widgets/arc_store_widget.py
+
+    # Best effort: a .install script runs as root with no reliable way to
+    # tell which user's home to use, so this goes through /home/*. It only
+    # deletes a file that really is that override (it hides the entry);
+    # anything else by that name is left alone.
+    for home_dir in /home/*; do
+        [ -d "${home_dir}" ] || continue
+        override="${home_dir}/.local/share/applications/github.zcharka.arcstore.desktop"
+        if [ -f "${override}" ] && grep -qix 'NoDisplay=true' "${override}"; then
+            rm -f "${override}"
+        fi
+    done
 }
 
 post_remove() {

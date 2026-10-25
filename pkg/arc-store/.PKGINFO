@@ -3,12 +3,12 @@
 pkgname = arc-store
 pkgbase = arc-store
 xdata = pkgtype=pkg
-pkgver = 1.0.0-11
+pkgver = 1.0.0-12
 pkgdesc = Arc Store - a graphical package manager for pacman and the AUR
 url = https://github.com/zcharka
-builddate = 1788902762
+builddate = 1792927017
 packager = Unknown Packager
-size = 802585
+size = 1441082
 arch = any
 license = GPL-3.0
 depend = python-gobject

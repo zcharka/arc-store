@@ -23,12 +23,17 @@ try:
 except Exception:
     WEBKIT_AVAILABLE = False
 from gi.repository import Gtk, Adw, GLib, Pango, Gdk, Gio, GObject
-from auth.sudo_manager import get_sudo_manager
+from auth.sudo_manager import LazySudoManager
 from i18n.localizer import translate_dialog, tr as _
+import arc_center_integration
 APP_NAME = "arc-store"
 LOCALE_DIR = os.path.abspath("/usr/share/locale")
-# Standalone app: no host to inject these, so we own them directly.
-sudo_manager = get_sudo_manager()
+# Standalone, Arc Store owns its sudo manager; hosted inside Arc Center it
+# uses Arc Center's instead (see arc_store_hosting.py). Either way this one
+# name is all the code below ever touches — it looks the real manager up
+# on each use, so nothing is created at import time and a manager adopted
+# later is picked up automatically.
+sudo_manager = LazySudoManager()
 CONFIG_DIR = os.path.expanduser(f"~/.config/{APP_NAME}")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 WIDE_LAYOUT_THRESHOLD = 900
@@ -68,6 +73,11 @@ class PackageObject(GObject.Object):
         self.flatpak_remote = flatpak_remote
         self.display_name = display_name or name
 class PackageManagerView(Gtk.Box):
+    # True only in the subclass Arc Center instantiates (arc_store_hosting.py).
+    # A class attribute rather than an __init__ argument because the right
+    # pane is built *inside* __init__ and needs to know already.
+    is_hosted = False
+
     def __init__(self, hide_sidebar=False, window=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.widgetname = "Arc Store"
@@ -78,6 +88,11 @@ class PackageManagerView(Gtk.Box):
         self.set_margin_end(12)
         self.window = window
         self.hide_sidebar = hide_sidebar
+        # "Move to Arc Center" switches (one per right-pane variant, see
+        # setup_right_pane) and a flag that keeps them from reacting to each
+        # other, or to a second click, while a change is in progress.
+        self._center_switches = []
+        self._center_busy = False
         self.user_password = None
         self.process_in_progress = False
         self.pulse_timer_id = None
@@ -1971,11 +1986,19 @@ class PackageManagerView(Gtk.Box):
             'SUDO_ASKPASS': sudo_manager.askpass_script  
         }
         threading.Thread(target=self.execute_shell, args=(cmd, self.aur_pkg_name, cwd, env_extra), daemon=True).start()
-    def prompt_for_password(self, callback_success):
+    def prompt_for_password(self, callback_success, on_cancel=None, body_text=None):
+        """Ask for the sudo password. `callback_success` runs once it has
+        been validated and stored. `on_cancel`, if given, runs whenever the
+        prompt ends *without* that — Cancel, closing the dialog, an empty
+        entry or a wrong password — so a caller that already moved some
+        control (a switch, say) can put it back. `body_text` overrides the
+        message, which is otherwise chosen from self.action_type."""
         root = self.get_root() or self.window
         action_label = _("install") if getattr(self, "action_type", "install") == "install" else _("remove")
         action_type = getattr(self, "action_type", "install")
-        if action_type == "refresh":
+        if body_text is not None:
+            pass
+        elif action_type == "refresh":
              body_text = _("Please enter your password to update repositories.")
         elif action_type == "clear_cache":
              body_text = _("Please enter your password to clear the package cache.")
@@ -1999,12 +2022,14 @@ class PackageManagerView(Gtk.Box):
         box.append(entry)
         dialog.set_extra_child(box)
         def on_response(dialog, response):
+            confirmed = False
             if response == "unlock":
                 pwd = entry.get_text()
                 if pwd:
                     if sudo_manager.validate_password(pwd):
                         sudo_manager.set_password(pwd)
                         self.user_password = pwd
+                        confirmed = True
                         callback_success()
                     else:
                         err_dialog = Adw.MessageDialog(
@@ -2015,6 +2040,8 @@ class PackageManagerView(Gtk.Box):
                         err_dialog.add_response("ok", _("OK"))
                         translate_dialog(err_dialog)
                         err_dialog.present()
+            if not confirmed and on_cancel is not None:
+                on_cancel()
             dialog.close()
         dialog.connect("response", on_response)
         entry.connect("activate", lambda w: dialog.response("unlock"))
@@ -2145,6 +2172,7 @@ class PackageManagerView(Gtk.Box):
         top_actions_group.add(row_refresh)
 
         self.right_pane.append(top_actions_group)
+        self.right_pane.append(self._build_integration_group())
 
         right_pane_spacer = Gtk.Box()
         right_pane_spacer.set_vexpand(True)
@@ -2214,6 +2242,7 @@ class PackageManagerView(Gtk.Box):
         compact_top_actions_group.add(compact_row_refresh)
 
         compact_center.append(compact_top_actions_group)
+        compact_center.append(self._build_integration_group())
 
         compact_pane_spacer = Gtk.Box()
         compact_pane_spacer.set_vexpand(True)
@@ -2247,7 +2276,7 @@ class PackageManagerView(Gtk.Box):
 
         compact_center.append(compact_bottom_actions_group)
 
-        self.compact_panel_box.append(compact_center)
+        self.compact_panel_box.append(self._make_side_scroller(compact_center))
         self.compact_panel_revealer = Gtk.Revealer()
         self.compact_panel_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_LEFT)
         self.compact_panel_revealer.set_transition_duration(250)
@@ -2260,12 +2289,182 @@ class PackageManagerView(Gtk.Box):
         self.compact_overlay.set_vexpand(True)
         self.compact_overlay.add_overlay(self.compact_panel_revealer)
         # Build the permanent widget tree (no reparenting ever)
-        self.right_revealer.set_child(self.right_pane)
+        self.right_revealer.set_child(self._make_side_scroller(self.right_pane))
         self.content_hbox.append(self.content_stack)
         self.content_hbox.append(self.right_revealer)
         self.compact_overlay.set_child(self.content_hbox)
         self.main_layout_box.append(self.compact_overlay)
         self.top_stack.add_named(self.main_layout_box, "main_view")
+        self.refresh_arc_center_state()
+
+    @staticmethod
+    def _make_side_scroller(child):
+        """Put a side panel (the wide right pane, or the compact overlay's
+        content) in a scroller that only ever scrolls vertically, and only
+        when the panel really doesn't fit.
+
+        Why: a panel full of wrapping labels has a minimum height that grows
+        with every extra line, so a longer translation or a narrower pane
+        can make it ask for more height than the window has — and the whole
+        page is then laid out taller than the window, with the bottom group
+        cut off. Inside a scroller the panel can't force that: its height
+        requirement no longer reaches the window, and a panel that is too
+        tall simply gets a scrollbar. Width behaves as before (natural width
+        is still propagated, no horizontal scrolling)."""
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_propagate_natural_width(True)
+        scroller.set_propagate_natural_height(False)
+        scroller.set_vexpand(True)
+        scroller.set_child(child)
+        return scroller
+
+    # ── Integration with Arc Center ───────────────────────────────────────
+    # The "Move to Arc Center" switch. Arc Center loads widgets from
+    # /usr/share/arcos/widgets/; moving Arc Store there means putting its
+    # small arc_store_widget.py in that directory and hiding the normal
+    # application-menu entry. The file and launcher mechanics live in
+    # arc_center_integration.py; this is just the UI and the sudo flow
+    # around them.
+
+    def _build_integration_group(self):
+        """One 'Integration' group holding one switch row. Called once for
+        the wide right pane and once for the compact overlay — each needs
+        its own widgets (GTK widgets can't have two parents) — and both
+        switches are kept in step through self._center_switches."""
+        group = Adw.PreferencesGroup()
+        group.set_title(_("Integration"))
+
+        switch = Gtk.Switch()
+        switch.set_valign(Gtk.Align.CENTER)
+        handler = switch.connect("notify::active", self._on_arc_center_toggled)
+        self._center_switches.append((switch, handler))
+
+        row = Adw.ActionRow()
+        row.set_title(_("Move to Arc Center"))
+        row.set_subtitle(_("Widget in Arc Center, hidden from the app menu"))
+        row.add_prefix(Gtk.Image.new_from_icon_name("application-x-addon-symbolic"))
+        row.add_suffix(switch)
+        row.set_activatable_widget(switch)
+        group.add(row)
+        return group
+
+    def _set_center_switches(self, active):
+        """Put every copy of the switch on `active` without re-triggering
+        the toggle handler. A Gtk.Switch has two properties — "active" (the
+        knob position) and "state" (the settled value some styling keys off)
+        — and they only stay equal on their own when the user clicks; set
+        from code, both have to be set or the switch can render blue with
+        its knob still on the left."""
+        for switch, handler in self._center_switches:
+            switch.handler_block(handler)
+            switch.set_active(active)
+            switch.set_state(active)
+            switch.handler_unblock(handler)
+
+    def refresh_arc_center_state(self):
+        # Hosted = by definition already in Arc Center, whatever the disk says.
+        self._set_center_switches(self.is_hosted or arc_center_integration.is_in_arc_center())
+
+    def _on_arc_center_toggled(self, switch, _pspec):
+        if self._center_busy:
+            return
+        move_in = switch.get_active()
+        # Mirror to the twin switch right away so the wide pane and the
+        # compact overlay never disagree.
+        self._set_center_switches(move_in)
+
+        def proceed():
+            self._start_arc_center_change(move_in)
+
+        def cancelled():
+            self._set_center_switches(not move_in)
+
+        if sudo_manager.user_password:
+            proceed()
+        else:
+            self.prompt_for_password(
+                proceed,
+                on_cancel=cancelled,
+                body_text=_("Please enter your password to change the Arc Center integration."),
+            )
+
+    def _start_arc_center_change(self, move_in):
+        self._center_busy = True
+        for switch, _handler in self._center_switches:
+            switch.set_sensitive(False)
+
+        def worker():
+            try:
+                if move_in:
+                    ok, error = arc_center_integration.move_to_arc_center(sudo_manager)
+                else:
+                    ok, error = arc_center_integration.move_out_of_arc_center(sudo_manager)
+            except Exception as exc:  # never leave the switches frozen
+                ok, error = False, str(exc)
+            try:
+                sudo_manager.forget_password()
+            except Exception:
+                pass
+            GLib.idle_add(self._finish_arc_center_change, move_in, ok, error)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_arc_center_change(self, move_in, ok, error):
+        self._center_busy = False
+        for switch, _handler in self._center_switches:
+            switch.set_sensitive(True)
+
+        if not ok:
+            self._set_center_switches(not move_in)
+            self._show_center_dialog(_("Error"), error or _("The change could not be applied."))
+            return False
+
+        self._set_center_switches(move_in)
+        if move_in:
+            # Arc Center scans its widgets folder at start-up only, and this
+            # window is a stand-alone one that has nothing left to do — so
+            # say what happened and close it. Arc Center is deliberately
+            # *not* launched from here: when it is already open (the usual
+            # case) that just produces a second, duplicate instance.
+            self._show_center_dialog(
+                _("Done"),
+                _("Arc Store was moved to Arc Center. This window will now close. Open Arc Center (or restart it if it is already running) to see the new widget."),
+                on_close=self._close_standalone_window,
+            )
+        else:
+            self._show_center_dialog(
+                _("Done"),
+                _("Arc Store was removed from Arc Center. Restart Arc Center to see the change — Arc Store will appear in the application menu again."),
+            )
+        return False
+
+    def _close_standalone_window(self):
+        # Inside Arc Center the "window" is Arc Center itself — never close that.
+        if self.is_hosted:
+            return
+        root = self.get_root() or self.window
+        if isinstance(root, Gtk.Window):
+            root.close()
+
+    def _show_center_dialog(self, heading, body, on_close=None):
+        parent = self.get_root() or self.window
+        kwargs = {"heading": heading, "body": body}
+        # transient_for strictly needs a real Gtk.Window; anything else
+        # (None, or a stand-in object) is a TypeError — leave it out then.
+        if isinstance(parent, Gtk.Window):
+            kwargs["transient_for"] = parent
+        dialog = Adw.MessageDialog(**kwargs)
+        dialog.add_response("ok", _("OK"))
+        dialog.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
+
+        def on_response(dlg, response):
+            if on_close:
+                on_close()
+
+        dialog.connect("response", on_response)
+        translate_dialog(dialog)
+        dialog.present()
 
     def get_right_pane_min_width(self):
         return RIGHT_PANE_MIN_WIDTH

@@ -116,4 +116,19 @@ translations = {
     # Added for the Installed/Discover split.
     "Installed": "Zainstalowane",
     "Discover": "Odkrywaj",
+
+    # Added for the "Move to Arc Center" switch.
+    "Integration": "Integracja",
+    "Move to Arc Center": "Przenieś do Arc Center",
+    "Widget in Arc Center, hidden from the app menu":
+        "Widżet w Arc Center, ukryty w menu aplikacji",
+    "Please enter your password to change the Arc Center integration.":
+        "Podaj hasło, aby zmienić integrację z Arc Center.",
+    "Done": "Zakończono",
+    "Error": "Błąd",
+    "The change could not be applied.": "Nie udało się zastosować zmiany.",
+    "Arc Store was moved to Arc Center. This window will now close. Open Arc Center (or restart it if it is already running) to see the new widget.":
+        "Arc Store został przeniesiony do Arc Center. To okno zostanie teraz zamknięte. Uruchom Arc Center (lub uruchom go ponownie, jeśli jest już otwarty), aby zobaczyć nowy widżet.",
+    "Arc Store was removed from Arc Center. Restart Arc Center to see the change — Arc Store will appear in the application menu again.":
+        "Arc Store został usunięty z Arc Center. Uruchom Arc Center ponownie, aby zobaczyć zmianę — Arc Store znów pojawi się w menu aplikacji.",
 }

@@ -2,7 +2,7 @@
 
 pkgname=arc-store
 pkgver=1.0.0
-pkgrel=11
+pkgrel=12
 pkgdesc='Arc Store - a graphical package manager for pacman and the AUR'
 url='https://github.com/zcharka'
 arch=('any')

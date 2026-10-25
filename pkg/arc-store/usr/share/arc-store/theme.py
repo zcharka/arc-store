@@ -12,6 +12,25 @@ here.
 
 from gi.repository import Gtk, Gdk
 
+# The one stylesheet the package-manager view itself depends on (the
+# Installed/Discover mode switch: rounded rectangles, not a full pill, and
+# neutral grey — no accent color — so it reads as a plain view toggle rather
+# than a call-to-action button). Kept apart from BASE_CSS because it is also
+# what gets loaded when Arc Store runs as a widget inside Arc Center, where
+# BASE_CSS as a whole must NOT be: it restyles window-level things
+# (headerbar.flat, .navigation-sidebar, widget:disabled, .compact-icon-btn)
+# that Arc Center's own header bars and sidebar use too. The class name
+# below is unique to Arc Store, so loading it display-wide is harmless.
+MODE_TOGGLE_CSS = """
+.mode-toggle-btn {
+    border-radius: 10px; padding-left: 14px; padding-right: 14px;
+    background-color: alpha(currentColor, 0.06);
+}
+.mode-toggle-btn:hover { background-color: alpha(currentColor, 0.10); }
+.mode-toggle-btn:checked { background-color: alpha(currentColor, 0.14); }
+.mode-toggle-btn:checked:hover { background-color: alpha(currentColor, 0.18); }
+"""
+
 BASE_CSS = """
 /* Header bar that blends into the window background */
 headerbar.flat {
@@ -38,17 +57,6 @@ widget:disabled { opacity: 0.3; }
     border-radius: 9999px; padding: 1px 9px; font-size: 0.68em; font-weight: 800;
 }
 .pill-action { border-radius: 9999px; padding-left: 14px; padding-right: 14px; }
-
-/* Installed/Discover mode switch: rounded rectangles (not a full pill),
-   neutral grey — no accent color — so it reads as a plain view toggle
-   rather than a call-to-action button. */
-.mode-toggle-btn {
-    border-radius: 10px; padding-left: 14px; padding-right: 14px;
-    background-color: alpha(currentColor, 0.06);
-}
-.mode-toggle-btn:hover { background-color: alpha(currentColor, 0.10); }
-.mode-toggle-btn:checked { background-color: alpha(currentColor, 0.14); }
-.mode-toggle-btn:checked:hover { background-color: alpha(currentColor, 0.18); }
 
 /* Compact icon buttons */
 .compact-icon-btn { min-width: 40px; min-height: 40px; padding: 6px; border-radius: 10px; margin: 2px; }
@@ -77,7 +85,8 @@ widget:disabled { opacity: 0.3; }
 .rounded-list {
     border-radius: 12px;
 }
-"""
+""" + MODE_TOGGLE_CSS
+
 
 def apply_css(css: str) -> None:
     """Load an application-priority stylesheet onto the default display."""
@@ -89,3 +98,17 @@ def apply_css(css: str) -> None:
     Gtk.StyleContext.add_provider_for_display(
         Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
+
+
+_hosted_css_loaded = False
+
+
+def apply_hosted_css() -> None:
+    """Hosted inside Arc Center: load only MODE_TOGGLE_CSS, and only once
+    per process however many times the widget gets created. Must run on the
+    main thread (it needs the display), i.e. from the widget's __init__."""
+    global _hosted_css_loaded
+    if _hosted_css_loaded:
+        return
+    _hosted_css_loaded = True
+    apply_css(MODE_TOGGLE_CSS)
